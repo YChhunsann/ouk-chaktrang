@@ -17,84 +17,47 @@ const matches = [];
 //#region Server handlers
 
 server.on('connection', client => {
+    console.log(`Player connected: ${client.id}`);
 
-    //Once a client connects, send him the current list of rooms
-    server.to(client.id).emit('updateRooms', rooms);
+    // Matchmaking handler
+    client.on('findMatch', () => {
+        console.log(`Player ${client.id} is searching for a match`);
+        waitingPlayers.push(client.id);
 
-    //#region Lobby
+        // Debug print current queue
+        console.log(`Current waiting players:`, waitingPlayers);
 
-    //Create a room
-    client.on('createRoom', room => {
-        room.matchID = client.id;
-        rooms.push(room);
-        server.emit('updateRooms', rooms);
-    });
+        // When at least 2 players are waiting, create matches
+        while (waitingPlayers.length >= 2) {
+            const player1 = waitingPlayers.shift();
+            const player2 = waitingPlayers.shift();
+            const matchID = generateMatchId();
 
-    //Delete a room
-    client.on('deleteRoom', () => {
-        for(let i = 0; i < rooms.length; i++){
-            if (rooms[i].matchID == client.id){
-                rooms.splice(rooms.indexOf(client), 1);
-                server.emit('updateRooms', rooms);
-                return;
-            }
+            console.log(`Matched players: ${player1} and ${player2} in room ${matchID}`);
+
+            // Notify both players
+            server.to(player1).emit('matchFound', matchID);
+            server.to(player2).emit('matchFound', matchID);
         }
     });
 
-    //If the client disconnects after creating a room, delete the room
     client.on('disconnect', () => {
-        for (let i = 0; i < rooms.length; i++){
-            if (rooms[i].matchID == client.id){
-                rooms.splice(rooms.indexOf(client), 1);
-                server.emit('updateRooms', rooms);
-                break;
-            }
+        console.log(`Player disconnected: ${client.id}`);
+        const index = waitingPlayers.indexOf(client.id);
+        if (index !== -1) {
+            waitingPlayers.splice(index, 1);
+            console.log(`Removed player ${client.id} from queue`);
         }
-
-        //Check if the client is in a game, if he is, end the game
     });
 
-    //#endregion
-
-    //#region Game Creation
-
-    client.on('joinRoom', matchID => {
-    
-        //If the client already had a room, delete that
-        for (let i = 0; i < rooms.length; i++){
-            if (rooms[i].matchID == client.id){
-                rooms.splice(rooms.indexOf(client), 1);
-                server.emit('updateRooms', rooms);
-            }
-        }
-
-        //Add the client to the socket.io room
-        client.join(matchID);
-
-        //Create the webpage
-        let matchURL = matchID.substring(0, 6);
-        addPage(matchURL);
-    
-        //Send the clients to the game
-        server.to(matchID).emit('joinMatch', matchURL);
-    });
-
-    //The client is inside the match
+    // Keep all your existing game-related handlers:
     client.on('inMatch', matchID => {
-
-        //Add each one of the players into the 'socket.server' room
         client.join(matchID);
         client.matchID = matchID;
-        let black = true;
-        
-        if (matches.indexOf(matchID) == -1){
-            matches.push(matchID);
-            black = false;
-        }
-        server.to(client.id).emit('assignSides', black, defaultBoard);
+        const isBlack = matches.indexOf(matchID) === -1;
+        if (!isBlack) matches.push(matchID);
+        server.to(client.id).emit('assignSides', isBlack, defaultBoard);
     });
-
-    //#endregion
 
     //#region In-game
 
@@ -117,15 +80,17 @@ server.on('connection', client => {
 //#region Helper methods
 
 //Gets the initial board information from a JSON file, it includes all the square notations and the location of all pieces:
-function getInitialBoard(){
-    return JSON.parse(fs.readFileSync(__dirname+'/board.json', 'utf8'));
+function getInitialBoard() {
+    return JSON.parse(fs.readFileSync(__dirname + '/board.json', 'utf8'));
 }
 
 //#endregion
-
+function generateMatchId() {
+    return Math.random().toString(36).substring(2, 8);
+}
 //#region Http & Handle new games
 
-function addPage(matchID){
+function addPage(matchID) {
     app.get(`/${matchID}`, (req, res) => {
         res.sendFile(__dirname + '/public/match.html');
     });
